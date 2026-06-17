@@ -1,0 +1,103 @@
+{% extends 'base.html' %}
+{% block title %}Select Prices — {{ vendor.name }}{% endblock %}
+
+{% block content %}
+<div class="section-header">
+  <div class="d-flex align-center gap-3">
+    <a href="{{ url_for('upload', vendor_id=vendor.id) }}" class="btn btn-secondary btn-sm">← Back</a>
+    <h2>{{ vendor.name }}</h2>
+  </div>
+</div>
+
+<div class="step-bar mb-4">
+  <div class="step-bar-item done"><span class="step-num">✓</span>Upload File</div>
+  <div class="step-divider"></div>
+  <div class="step-bar-item done"><span class="step-num">✓</span>Select Columns</div>
+  <div class="step-divider"></div>
+  <div class="step-bar-item active"><span class="step-num">3</span>Select Prices</div>
+  <div class="step-divider"></div>
+  <div class="step-bar-item"><span class="step-num">4</span>Map Cuts</div>
+</div>
+
+<div class="app-card mb-3">
+  <div class="app-card-header">
+    Price Selection — {{ filename }}
+    <span class="hint">{{ pending|length }} items · pick the price to use for each</span>
+  </div>
+  <div style="overflow-x:auto;">
+    <form method="post" id="price-form">
+
+      <table>
+        <thead>
+          <tr>
+            <th style="min-width:220px;">Item</th>
+            <th>Available Prices — click to select</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in pending %}
+          <tr>
+            <td class="fw-semibold" style="font-size:.88rem;">{{ item.raw_description }}</td>
+            <td>
+              {% if item.options|length == 1 %}
+                {# Only one price — auto-selected, no choice needed #}
+                <input type="hidden" name="price_{{ loop.index0 }}" value="{{ item.options[0].price }}">
+                <span class="price-badge price-locked">
+                  {{ item.options[0].col }}: ${{ '%.2f'|format(item.options[0].price) }}
+                </span>
+              {% else %}
+                <div class="price-opts" role="group">
+                  {% for opt in item.options %}
+                  <label class="price-opt-label {% if loop.first %}selected{% endif %}">
+                    <input type="radio" name="price_{{ loop.index0 }}" value="{{ opt.price }}"
+                           {% if loop.first %}checked{% endif %}
+                           onchange="selectPrice(this)">
+                    {{ opt.col }}: ${{ '%.2f'|format(opt.price) }}
+                  </label>
+                  {% endfor %}
+                </div>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+
+      <div style="padding:16px 14px;border-top:1px solid #f0f0f0;text-align:right;">
+        <button type="submit" class="btn btn-primary btn-lg">Continue to Cut Mapping →</button>
+      </div>
+
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<style>
+.price-opts { display: flex; flex-wrap: wrap; gap: 6px; }
+.price-opt-label {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 4px 12px; border-radius: 20px; font-size: .82rem; font-weight: 600;
+  border: 1.5px solid #d0d0d0; background: #f8f9fa; color: #555;
+  cursor: pointer; transition: border-color .12s, background .12s, color .12s;
+  user-select: none;
+}
+.price-opt-label input[type=radio] { display: none; }
+.price-opt-label:hover { border-color: #8b0000; color: #8b0000; }
+.price-opt-label.selected { border-color: #8b0000; background: #8b0000; color: #fff; }
+.price-badge {
+  display: inline-block; padding: 4px 12px; border-radius: 20px;
+  font-size: .82rem; font-weight: 600;
+}
+.price-locked { background: #eafaf1; color: #1e8449; border: 1.5px solid #a9dfbf; }
+</style>
+<script>
+function selectPrice(radio) {
+  var group = radio.closest('.price-opts');
+  group.querySelectorAll('.price-opt-label').forEach(function(l) {
+    l.classList.remove('selected');
+  });
+  radio.closest('.price-opt-label').classList.add('selected');
+}
+</script>
+{% endblock %}

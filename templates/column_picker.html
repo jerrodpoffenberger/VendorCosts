@@ -91,7 +91,7 @@
   <div class="app-card mb-4">
     <div class="app-card-header">
       File Preview — {{ filename }}
-      <span class="hint">Columns shown by letter (A, B, C…)</span>
+      <span class="hint">Column letters A, B, C… match selectors below</span>
     </div>
     <div style="overflow-x:auto;">
       <table style="font-size:.78rem;">
@@ -109,8 +109,7 @@
             <td style="color:#aaa;text-align:center;font-size:.72rem;">{{ loop.index }}</td>
             {% for letter in col_letters %}
             {% set val = row[loop.index0] if loop.index0 < row|length else '' %}
-            <td style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
-                title="{{ val }}">{{ val }}</td>
+            <td style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ val }}">{{ val }}</td>
             {% endfor %}
           </tr>
           {% endfor %}
@@ -123,23 +122,23 @@
     <div class="app-card-header">Define Column Groups</div>
     <div class="app-card-body">
       <p style="font-size:.85rem;color:#666;margin-bottom:1rem;">
-        For each side-by-side product group in the file, specify which column holds the
-        cut description and which holds the price. All groups are extracted and combined.
+        For each side-by-side product group, choose the description column and one or more
+        price columns. When you add multiple price columns you'll pick the right price
+        per item in the next step.
       </p>
 
       <form method="post" id="form-multigroup">
         <input type="hidden" name="mode" value="multigroup">
 
         <div id="groups-container">
-          <!-- Group 0 is always present -->
-          <div class="mg-group" data-idx="0">
+          <div class="mg-group" data-gidx="0">
             <div class="mg-group-header">
               <span class="mg-group-label">Group 1</span>
-              <button type="button" class="btn btn-danger btn-sm mg-remove" style="display:none;"
-                      onclick="removeGroup(this)">Remove</button>
+              <button type="button" class="btn btn-danger btn-sm mg-remove-group" style="display:none"
+                      onclick="removeGroup(this)">Remove Group</button>
             </div>
             <div class="mg-group-body">
-              <div class="mg-field">
+              <div class="mg-field" style="min-width:140px;max-width:180px;">
                 <label class="form-label">Description column</label>
                 <select class="form-select mg-desc" name="group_0_desc" required>
                   {% for letter in col_letters %}
@@ -147,13 +146,21 @@
                   {% endfor %}
                 </select>
               </div>
-              <div class="mg-field">
-                <label class="form-label">Price column</label>
-                <select class="form-select mg-price" name="group_0_price" required>
-                  {% for letter in col_letters %}
-                  <option value="{{ loop.index0 }}">{{ letter }}</option>
-                  {% endfor %}
-                </select>
+              <div class="mg-prices-wrap" style="flex:1;">
+                <label class="form-label">Price column(s)</label>
+                <div class="price-cols-list" data-gidx="0">
+                  <div class="price-col-row" style="display:flex;gap:6px;align-items:center;margin-bottom:4px;">
+                    <select class="form-select" name="group_0_price_0" required style="max-width:120px;">
+                      {% for letter in col_letters %}
+                      <option value="{{ loop.index0 }}">{{ letter }}</option>
+                      {% endfor %}
+                    </select>
+                    <button type="button" class="btn btn-danger btn-sm price-col-remove" style="display:none"
+                            onclick="removePriceCol(this)">×</button>
+                  </div>
+                </div>
+                <button type="button" class="btn btn-outline btn-sm" style="margin-top:4px;"
+                        onclick="addPriceCol(this)" data-gidx="0">+ Price Column</button>
               </div>
             </div>
           </div>
@@ -164,7 +171,7 @@
         </button>
 
         <button type="submit" class="btn btn-primary btn-lg btn-w100" style="margin-top:1.25rem;">
-          Continue to Cut Mapping →
+          Continue →
         </button>
       </form>
     </div>
@@ -177,47 +184,29 @@
 {% block scripts %}
 <style>
 .mode-tab-btn {
-  background: none;
-  border: none;
-  padding: 9px 20px;
-  font-size: .85rem;
-  font-weight: 600;
-  cursor: pointer;
-  color: #888;
-  border-bottom: 3px solid transparent;
-  margin-bottom: -2px;
+  background: none; border: none; padding: 9px 20px;
+  font-size: .85rem; font-weight: 600; cursor: pointer; color: #888;
+  border-bottom: 3px solid transparent; margin-bottom: -2px;
   transition: color .15s, border-color .15s;
 }
 .mode-tab-btn.active { color: #8b0000; border-bottom-color: #8b0000; }
 .mode-tab-btn:hover  { color: #8b0000; }
-
-.mg-group {
-  background: #f8f9fa;
-  border: 1px solid #e0e0e0;
-  border-radius: 8px;
-  margin-bottom: .75rem;
-  overflow: hidden;
-}
-.mg-group-header {
-  background: #ecf0f1;
-  padding: 8px 14px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
+.mg-group { background: #f8f9fa; border: 1px solid #e0e0e0; border-radius: 8px; margin-bottom: .75rem; overflow: hidden; }
+.mg-group-header { background: #ecf0f1; padding: 8px 14px; display: flex; align-items: center; justify-content: space-between; }
 .mg-group-label { font-weight: 700; font-size: .82rem; color: #555; }
-.mg-group-body {
-  padding: 12px 14px;
-  display: flex;
-  gap: 16px;
-  flex-wrap: wrap;
-}
-.mg-field { flex: 1; min-width: 160px; }
+.mg-group-body { padding: 12px 14px; display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; }
+.mg-field { flex: 0 0 auto; }
 </style>
 
 <script>
 var colLetters = {{ col_letters | tojson }};
 var groupCount = 1;
+
+function colOptions(selectedIdx) {
+  return colLetters.map(function(l, i) {
+    return '<option value="' + i + '"' + (i === selectedIdx ? ' selected' : '') + '>' + l + '</option>';
+  }).join('');
+}
 
 function setMode(mode) {
   document.getElementById('pane-simple').style.display      = mode === 'simple'     ? '' : 'none';
@@ -230,56 +219,105 @@ function setMode(mode) {
   {% endif %}
 }
 
-function buildColOptions(selectedIdx) {
-  return colLetters.map(function(letter, i) {
-    return '<option value="' + i + '"' + (i === selectedIdx ? ' selected' : '') + '>' + letter + '</option>';
-  }).join('');
+function addPriceCol(btn) {
+  var gidx = btn.dataset.gidx;
+  var list = document.querySelector('.price-cols-list[data-gidx="' + gidx + '"]');
+  var rows = list.querySelectorAll('.price-col-row');
+  var nextP = rows.length;
+  var row = document.createElement('div');
+  row.className = 'price-col-row';
+  row.style.cssText = 'display:flex;gap:6px;align-items:center;margin-bottom:4px;';
+  row.innerHTML =
+    '<select class="form-select" name="group_' + gidx + '_price_' + nextP + '" style="max-width:120px;">' +
+      colOptions(nextP < colLetters.length ? nextP : 0) +
+    '</select>' +
+    '<button type="button" class="btn btn-danger btn-sm price-col-remove" onclick="removePriceCol(this)">×</button>';
+  list.appendChild(row);
+  updatePriceRemoveButtons(list);
+}
+
+function removePriceCol(btn) {
+  var row = btn.closest('.price-col-row');
+  var list = row.closest('.price-cols-list');
+  row.remove();
+  reindexPriceCols(list);
+  updatePriceRemoveButtons(list);
+}
+
+function reindexPriceCols(list) {
+  var gidx = list.dataset.gidx;
+  list.querySelectorAll('.price-col-row').forEach(function(row, p) {
+    var sel = row.querySelector('select');
+    if (sel) sel.name = 'group_' + gidx + '_price_' + p;
+  });
+}
+
+function updatePriceRemoveButtons(list) {
+  var rows = list.querySelectorAll('.price-col-row');
+  rows.forEach(function(row) {
+    var btn = row.querySelector('.price-col-remove');
+    if (btn) btn.style.display = rows.length > 1 ? '' : 'none';
+  });
 }
 
 function addGroup() {
-  var idx = groupCount;
+  var gidx = groupCount;
   groupCount++;
   var div = document.createElement('div');
   div.className = 'mg-group';
-  div.dataset.idx = idx;
+  div.dataset.gidx = gidx;
   div.innerHTML =
     '<div class="mg-group-header">' +
       '<span class="mg-group-label">Group ' + groupCount + '</span>' +
-      '<button type="button" class="btn btn-danger btn-sm mg-remove" onclick="removeGroup(this)">Remove</button>' +
+      '<button type="button" class="btn btn-danger btn-sm mg-remove-group" onclick="removeGroup(this)">Remove Group</button>' +
     '</div>' +
     '<div class="mg-group-body">' +
-      '<div class="mg-field"><label class="form-label">Description column</label>' +
-        '<select class="form-select mg-desc" name="group_' + idx + '_desc">' + buildColOptions(0) + '</select>' +
+      '<div class="mg-field" style="min-width:140px;max-width:180px;">' +
+        '<label class="form-label">Description column</label>' +
+        '<select class="form-select mg-desc" name="group_' + gidx + '_desc" required>' + colOptions(0) + '</select>' +
       '</div>' +
-      '<div class="mg-field"><label class="form-label">Price column</label>' +
-        '<select class="form-select mg-price" name="group_' + idx + '_price">' + buildColOptions(1) + '</select>' +
+      '<div class="mg-prices-wrap" style="flex:1;">' +
+        '<label class="form-label">Price column(s)</label>' +
+        '<div class="price-cols-list" data-gidx="' + gidx + '">' +
+          '<div class="price-col-row" style="display:flex;gap:6px;align-items:center;margin-bottom:4px;">' +
+            '<select class="form-select" name="group_' + gidx + '_price_0" style="max-width:120px;">' + colOptions(1) + '</select>' +
+            '<button type="button" class="btn btn-danger btn-sm price-col-remove" style="display:none" onclick="removePriceCol(this)">×</button>' +
+          '</div>' +
+        '</div>' +
+        '<button type="button" class="btn btn-outline btn-sm" style="margin-top:4px;" onclick="addPriceCol(this)" data-gidx="' + gidx + '">+ Price Column</button>' +
       '</div>' +
     '</div>';
   document.getElementById('groups-container').appendChild(div);
-  updateRemoveButtons();
+  updateGroupRemoveButtons();
   renumberGroups();
 }
 
 function removeGroup(btn) {
   btn.closest('.mg-group').remove();
   renumberGroups();
-  updateRemoveButtons();
+  updateGroupRemoveButtons();
 }
 
 function renumberGroups() {
-  var groups = document.querySelectorAll('#groups-container .mg-group');
-  groups.forEach(function(g, i) {
-    g.dataset.idx = i;
+  document.querySelectorAll('#groups-container .mg-group').forEach(function(g, i) {
+    g.dataset.gidx = i;
     g.querySelector('.mg-group-label').textContent = 'Group ' + (i + 1);
-    g.querySelector('.mg-desc').name  = 'group_' + i + '_desc';
-    g.querySelector('.mg-price').name = 'group_' + i + '_price';
+    g.querySelector('.mg-desc').name = 'group_' + i + '_desc';
+    var list = g.querySelector('.price-cols-list');
+    list.dataset.gidx = i;
+    list.querySelectorAll('.price-col-row').forEach(function(row, p) {
+      var sel = row.querySelector('select');
+      if (sel) sel.name = 'group_' + i + '_price_' + p;
+    });
+    var addBtn = g.querySelector('[onclick^="addPriceCol"]');
+    if (addBtn) addBtn.dataset.gidx = i;
   });
 }
 
-function updateRemoveButtons() {
+function updateGroupRemoveButtons() {
   var groups = document.querySelectorAll('#groups-container .mg-group');
-  groups.forEach(function(g, i) {
-    var btn = g.querySelector('.mg-remove');
+  groups.forEach(function(g) {
+    var btn = g.querySelector('.mg-remove-group');
     if (btn) btn.style.display = groups.length > 1 ? '' : 'none';
   });
 }

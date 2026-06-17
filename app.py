@@ -336,33 +336,67 @@ def column_picker(token):
         mode = request.form.get('mode', 'simple')
 
         if mode == 'multigroup':
-            items, seen = [], set()
+            pending, seen = [], set()
             g = 0
             while True:
                 desc_col = request.form.get(f'group_{g}_desc')
-                price_col = request.form.get(f'group_{g}_price')
                 if desc_col is None:
                     break
                 try:
-                    d_idx, p_idx = int(desc_col), int(price_col)
+                    d_idx = int(desc_col)
                 except (ValueError, TypeError):
                     g += 1
                     continue
+
+                # Collect all price column indices for this group
+                p_indices = []
+                p = 0
+                while True:
+                    pc = request.form.get(f'group_{g}_price_{p}')
+                    if pc is None:
+                        break
+                    try:
+                        p_indices.append(int(pc))
+                    except (ValueError, TypeError):
+                        pass
+                    p += 1
+
+                if not p_indices:
+                    g += 1
+                    continue
+
                 for raw_row in raw_rows:
-                    if len(raw_row) <= max(d_idx, p_idx):
+                    if len(raw_row) <= d_idx:
                         continue
                     desc = raw_row[d_idx].strip()
-                    price = clean_price(raw_row[p_idx])
-                    if not desc or price is None or desc in seen:
+                    if not desc or desc in seen:
+                        continue
+                    options = []
+                    for p_idx in p_indices:
+                        if p_idx < len(raw_row):
+                            price = clean_price(raw_row[p_idx])
+                            if price is not None:
+                                options.append({'col': _col_letter(p_idx), 'price': price})
+                    if not options:
                         continue
                     seen.add(desc)
-                    items.append({'raw_description': desc, 'price': price, 'unit': 'lb'})
+                    pending.append({'raw_description': desc, 'unit': 'lb', 'options': options})
                 g += 1
 
-            if not items:
+            if not pending:
                 flash('No valid price rows found. Check your column selections.', 'danger')
                 return redirect(request.url)
 
+            needs_picker = any(len(item['options']) > 1 for item in pending)
+            if needs_picker:
+                data.update({'mode': 'multigroup', 'pending': pending})
+                _save_tmp(token, data)
+                return redirect(url_for('price_picker', token=token))
+
+            # All items have exactly one price — skip the picker step
+            items = [{'raw_description': p['raw_description'],
+                      'price': p['options'][0]['price'],
+                      'unit': p['unit']} for p in pending]
             data.update({'mode': 'multigroup', 'items': items})
             _save_tmp(token, data)
             return redirect(url_for('cut_mapper', token=token))
@@ -408,6 +442,39 @@ def column_picker(token):
                            filename=data['filename'],
                            raw_rows=raw_rows[:12],
                            col_letters=col_letters)
+
+
+# ── Upload wizard: Step 2.5 — pick price per item ────────────────────────────
+
+@app.route('/upload/<token>/prices', methods=['GET', 'POST'])
+@login_required
+def price_picker(token):
+    data = _load_tmp(token)
+    if not data:
+        flash('Upload session expired. Please upload again.', 'danger')
+        return redirect(url_for('vendors'))
+
+    vendor = db.get_or_404(Vendor, data['vendor_id'])
+    pending = data.get('pending', [])
+
+    if request.method == 'POST':
+        items = []
+        for i, item in enumerate(pending):
+            price = clean_price(request.form.get(f'price_{i}'))
+            if price is None and item['options']:
+                price = item['options'][0]['price']
+            if price is not None:
+                items.append({'raw_description': item['raw_description'],
+                              'price': price, 'unit': item['unit']})
+        if not items:
+            flash('No valid prices selected.', 'danger')
+            return redirect(request.url)
+        data.update({'items': items})
+        _save_tmp(token, data)
+        return redirect(url_for('cut_mapper', token=token))
+
+    return render_template('price_picker.html', vendor=vendor, token=token,
+                           pending=pending, filename=data['filename'])
 
 
 # ── Upload wizard: Step 3 — map cut names ────────────────────────────────────
