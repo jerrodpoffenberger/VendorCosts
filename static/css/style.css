@@ -22,7 +22,7 @@ body {
 }
 
 .header-brand { display: flex; align-items: center; gap: 14px; }
-.header-icon  { font-size: 1.8rem; line-height: 1; }
+.header-logo  { height: 44px; width: auto; display: block; }
 
 #main-header h1 {
   font-size: 0.72rem;
