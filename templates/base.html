@@ -33,7 +33,7 @@
       Compare Prices
     </a>
     <a href="{{ url_for('vendors') }}"
-       class="nav-btn {% if request.endpoint in ('vendors','vendor_detail','upload','column_picker','price_picker','cut_mapper','toggle_vendor','activate_sheet','sheet_detail','vendor_mappings','update_mapping','delete_mapping','reset_vendor_password') %}active{% endif %}">
+       class="nav-btn {% if request.endpoint in ('vendors','vendor_detail','upload','column_picker','price_picker','cut_mapper','toggle_vendor','activate_sheet','sheet_detail','vendor_mappings','update_mapping','delete_mapping','reset_vendor_password','create_vendor_login') %}active{% endif %}">
       Vendors
     </a>
     <a href="{{ url_for('canonical_cuts') }}"

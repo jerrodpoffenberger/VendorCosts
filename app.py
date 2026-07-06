@@ -365,6 +365,26 @@ def reset_vendor_password(vendor_id):
     return redirect(url_for('vendor_detail', vendor_id=vendor_id))
 
 
+@app.route('/vendors/<int:vendor_id>/create-login', methods=['POST'])
+@admin_required
+def create_vendor_login(vendor_id):
+    vendor = db.get_or_404(Vendor, vendor_id)
+    username = request.form.get('username', '').strip()
+    password = request.form.get('password', '')
+    if vendor.user:
+        flash(f'"{vendor.name}" already has a login account.', 'warning')
+    elif not username or len(password) < 6:
+        flash('Username and a password of at least 6 characters are required.', 'danger')
+    elif User.query.filter_by(username=username).first():
+        flash(f'Username "{username}" is already taken.', 'warning')
+    else:
+        db.session.add(User(username=username, password_hash=generate_password_hash(password),
+                             role='vendor', vendor_id=vendor.id))
+        db.session.commit()
+        flash(f'Login created for "{vendor.name}".', 'success')
+    return redirect(url_for('vendor_detail', vendor_id=vendor_id))
+
+
 @app.route('/vendors/<int:vendor_id>/toggle', methods=['POST'])
 @admin_required
 def toggle_vendor(vendor_id):
