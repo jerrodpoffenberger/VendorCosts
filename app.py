@@ -934,29 +934,6 @@ def reports_print():
                            generated=datetime.now())
 
 
-# ── Price History ─────────────────────────────────────────────────────────────
-
-@app.route('/cuts/history')
-@admin_required
-def cut_history():
-    cuts = CanonicalCut.query.order_by(CanonicalCut.category, CanonicalCut.name).all()
-    cut_id = request.args.get('cut_id', type=int)
-    selected_cut = None
-    history = []
-    if cut_id:
-        selected_cut = CanonicalCut.query.get(cut_id)
-        if selected_cut:
-            history = (
-                db.session.query(LineItem, PriceSheet, Vendor)
-                .join(PriceSheet, LineItem.price_sheet_id == PriceSheet.id)
-                .join(Vendor, PriceSheet.vendor_id == Vendor.id)
-                .filter(LineItem.canonical_cut_id == cut_id)
-                .order_by(PriceSheet.uploaded_at.desc())
-                .all()
-            )
-    return render_template('cut_history.html', cuts=cuts, selected_cut=selected_cut, history=history)
-
-
 # ── Canonical cuts ────────────────────────────────────────────────────────────
 
 @app.route('/canonical-cuts')
