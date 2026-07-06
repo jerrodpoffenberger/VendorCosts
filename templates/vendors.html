@@ -29,7 +29,14 @@
                   <span class="badge" style="background:#6c757d;color:#fff;font-size:.7rem;padding:2px 7px;border-radius:10px;margin-left:6px;">Disabled</span>
                 {% endif %}
               </div>
-              <div class="item-meta">Added {{ v.created_at.strftime('%m/%d/%Y') }}</div>
+              <div class="item-meta">
+                Added {{ v.created_at.strftime('%m/%d/%Y') }}
+                {% if v.user %}
+                  · Login: <strong>{{ v.user.username }}</strong>
+                {% else %}
+                  · <span class="text-muted">No login account</span>
+                {% endif %}
+              </div>
             </div>
             <div class="item-actions">
               <a href="{{ url_for('vendor_detail', vendor_id=v.id) }}" class="btn btn-secondary btn-sm">Sheets</a>
@@ -76,6 +83,14 @@
           <div class="form-group">
             <label class="form-label">Vendor Name</label>
             <input type="text" name="name" class="form-control" placeholder="e.g. Tyson, Cargill…" required>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Login Username</label>
+            <input type="text" name="username" class="form-control" placeholder="e.g. tyson" required>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Initial Password</label>
+            <input type="text" name="password" class="form-control" placeholder="Share this with the vendor" minlength="6" required>
           </div>
           <button type="submit" class="btn btn-primary btn-w100">Add Vendor</button>
         </form>

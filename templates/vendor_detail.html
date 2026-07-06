@@ -13,6 +13,21 @@
   </div>
 </div>
 
+<div class="app-card" style="margin-bottom:20px;">
+  <div class="app-card-body d-flex align-center gap-3" style="flex-wrap:wrap;">
+    {% if vendor.user %}
+      <span>Login username: <strong>{{ vendor.user.username }}</strong></span>
+      <form method="post" action="{{ url_for('reset_vendor_password', vendor_id=vendor.id) }}"
+            class="d-flex align-center gap-2">
+        <input type="text" name="new_password" class="form-control" placeholder="New password" minlength="6" required style="width:200px;">
+        <button type="submit" class="btn btn-secondary btn-sm">Reset Password</button>
+      </form>
+    {% else %}
+      <span class="text-muted">This vendor has no login account. Recreate it from the Vendors page to enable self-service pricing.</span>
+    {% endif %}
+  </div>
+</div>
+
 {% if not sheets %}
 <div class="app-card">
   <div class="empty-state">
@@ -28,6 +43,7 @@
       <tr>
         <th>File</th>
         <th>Uploaded</th>
+        <th class="text-center">Week Ending</th>
         <th class="text-center">Items</th>
         <th class="text-center">Status</th>
         <th></th>
@@ -41,6 +57,18 @@
              style="color:inherit;text-decoration:underline dotted;">{{ sheet.filename }}</a>
         </td>
         <td class="text-muted">{{ sheet.uploaded_at.strftime('%m/%d/%Y %I:%M %p') }}</td>
+        <td class="text-center">
+          {% if sheet.week_ending %}
+            {{ sheet.week_ending.strftime('%m/%d/%Y') }}
+            {% if late_by_sheet.get(sheet.id) %}
+              <span class="badge badge-warning">Late</span>
+            {% else %}
+              <span class="badge badge-success">On time</span>
+            {% endif %}
+          {% else %}
+            <span class="text-muted">—</span>
+          {% endif %}
+        </td>
         <td class="text-center">{{ sheet.item_count }}</td>
         <td class="text-center">
           {% if sheet.is_active %}

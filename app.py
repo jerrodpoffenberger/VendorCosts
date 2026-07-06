@@ -1,18 +1,19 @@
 import json
 import os
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta, time as dtime
 from functools import wraps
 
 from dotenv import load_dotenv
 load_dotenv()
 
-from flask import Flask, render_template, request, redirect, url_for, flash, session
+from flask import Flask, render_template, request, redirect, url_for, flash, session, abort
 from sqlalchemy import inspect as sa_inspect, text
+from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 
 from extensions import db
-from models import Vendor, PriceSheet, CanonicalCut, CutMapping, LineItem
+from models import Vendor, PriceSheet, CanonicalCut, CutMapping, LineItem, User
 from file_parser import parse_file, parse_excel_raw, clean_price, detect_columns, detect_multigroup
 
 ALLOWED_EXTENSIONS = {'xlsx', 'xls', 'xlsm', 'csv', 'pdf'}
@@ -24,10 +25,46 @@ APP_PASSWORD = os.environ.get('APP_PASSWORD', 'admin')
 def login_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
-        if not session.get('logged_in'):
+        if not session.get('user_id'):
             return redirect(url_for('login'))
         return f(*args, **kwargs)
     return decorated
+
+
+def admin_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not session.get('user_id'):
+            return redirect(url_for('login'))
+        if session.get('role') != 'admin':
+            abort(403)
+        return f(*args, **kwargs)
+    return decorated
+
+
+def vendor_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not session.get('user_id'):
+            return redirect(url_for('login'))
+        if session.get('role') != 'vendor':
+            abort(403)
+        return f(*args, **kwargs)
+    return decorated
+
+
+def _current_week_ending(today=None):
+    """Return the date of the Saturday that closes the current weekly cycle."""
+    today = today or datetime.now().date()
+    days_ahead = (5 - today.weekday()) % 7  # Saturday = 5
+    return today + timedelta(days=days_ahead)
+
+
+def _submission_is_late(sheet):
+    if not sheet or not sheet.week_ending:
+        return False
+    deadline = datetime.combine(sheet.week_ending, dtime(17, 0))
+    return sheet.uploaded_at > deadline
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-change-in-prod')
@@ -70,9 +107,25 @@ with app.app_context():
         with db.engine.connect() as conn:
             conn.execute(text('ALTER TABLE vendors ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT 1'))
             conn.commit()
+    # Add week_ending / source columns to price_sheets if upgrading from an older schema
+    sheet_cols = [c['name'] for c in inspector.get_columns('price_sheets')]
+    with db.engine.connect() as conn:
+        if 'week_ending' not in sheet_cols:
+            conn.execute(text('ALTER TABLE price_sheets ADD COLUMN week_ending DATE'))
+            conn.commit()
+        if 'source' not in sheet_cols:
+            conn.execute(text("ALTER TABLE price_sheets ADD COLUMN source VARCHAR(20) DEFAULT 'upload'"))
+            conn.commit()
     for name, category in _SEED_CUTS:
         if not CanonicalCut.query.filter_by(name=name).first():
             db.session.add(CanonicalCut(name=name, category=category))
+    # Bootstrap the admin account from env vars if no admin exists yet
+    if not User.query.filter_by(role='admin').first():
+        db.session.add(User(
+            username=APP_USERNAME,
+            password_hash=generate_password_hash(APP_PASSWORD),
+            role='admin',
+        ))
     db.session.commit()
 
 
@@ -106,15 +159,18 @@ def allowed_file(filename):
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
-    if session.get('logged_in'):
-        return redirect(url_for('comparison'))
+    if session.get('user_id'):
+        return redirect(url_for('index'))
     error = None
     if request.method == 'POST':
         username = request.form.get('username', '').strip()
         password = request.form.get('password', '')
-        if username == APP_USERNAME and password == APP_PASSWORD:
-            session['logged_in'] = True
-            return redirect(url_for('comparison'))
+        user = User.query.filter_by(username=username).first()
+        if user and check_password_hash(user.password_hash, password):
+            session['user_id'] = user.id
+            session['role'] = user.role
+            session['vendor_id'] = user.vendor_id
+            return redirect(url_for('index'))
         error = 'Invalid username or password.'
     return render_template('login.html', error=error)
 
@@ -125,43 +181,159 @@ def logout():
     return redirect(url_for('login'))
 
 
+@app.route('/change-password', methods=['GET', 'POST'])
+@login_required
+def change_password():
+    if request.method == 'POST':
+        user = db.get_or_404(User, session['user_id'])
+        current = request.form.get('current_password', '')
+        new = request.form.get('new_password', '')
+        confirm = request.form.get('confirm_password', '')
+        if not check_password_hash(user.password_hash, current):
+            flash('Current password is incorrect.', 'danger')
+        elif len(new) < 6:
+            flash('New password must be at least 6 characters.', 'danger')
+        elif new != confirm:
+            flash('New passwords do not match.', 'danger')
+        else:
+            user.password_hash = generate_password_hash(new)
+            db.session.commit()
+            flash('Password updated.', 'success')
+            return redirect(url_for('index'))
+    return render_template('change_password.html')
+
+
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.route('/')
 @login_required
 def index():
-    return redirect(url_for('comparison'))
+    if session.get('role') == 'admin':
+        return redirect(url_for('comparison'))
+    return redirect(url_for('submit_prices'))
+
+
+# ── Vendor weekly submission ──────────────────────────────────────────────────
+
+@app.route('/submit', methods=['GET', 'POST'])
+@vendor_required
+def submit_prices():
+    vendor = db.get_or_404(Vendor, session['vendor_id'])
+    week_ending = _current_week_ending()
+
+    if request.method == 'POST':
+        sheet = PriceSheet.query.filter_by(vendor_id=vendor.id, week_ending=week_ending).first()
+        if not sheet:
+            sheet = PriceSheet(vendor_id=vendor.id, week_ending=week_ending, source='form',
+                                filename=f'Weekly submission — {week_ending.strftime("%m/%d/%Y")}')
+            db.session.add(sheet)
+            db.session.flush()
+
+        PriceSheet.query.filter(
+            PriceSheet.vendor_id == vendor.id,
+            PriceSheet.id != sheet.id,
+            PriceSheet.is_active == True,
+        ).update({'is_active': False})
+        sheet.is_active = True
+        sheet.uploaded_at = datetime.now()
+
+        existing_items = {item.canonical_cut_id: item for item in sheet.line_items}
+        saved = 0
+        for cut in CanonicalCut.query.all():
+            raw_price = request.form.get(f'price_{cut.id}', '').strip()
+            if not raw_price:
+                if cut.id in existing_items:
+                    db.session.delete(existing_items[cut.id])
+                continue
+            price = clean_price(raw_price)
+            if price is None:
+                continue
+            item = existing_items.get(cut.id)
+            if item:
+                item.price = price
+            else:
+                db.session.add(LineItem(
+                    price_sheet_id=sheet.id,
+                    raw_description=cut.name,
+                    price=price,
+                    unit='lb',
+                    canonical_cut_id=cut.id,
+                ))
+            saved += 1
+
+        sheet.item_count = saved
+        db.session.commit()
+
+        if saved == 0:
+            flash('No prices were saved — enter at least one price.', 'warning')
+        else:
+            late = _submission_is_late(sheet)
+            flash(f'Saved {saved} price(s) for the week ending {week_ending.strftime("%m/%d/%Y")}.'
+                  + (' This was submitted after the 5:00 PM Saturday deadline.' if late else ''),
+                  'warning' if late else 'success')
+        return redirect(url_for('submit_prices'))
+
+    current_sheet = PriceSheet.query.filter_by(vendor_id=vendor.id, week_ending=week_ending).first()
+    current_prices = {item.canonical_cut_id: item.price for item in current_sheet.line_items} if current_sheet else {}
+
+    previous_sheet = (PriceSheet.query
+                      .filter(PriceSheet.vendor_id == vendor.id, PriceSheet.week_ending < week_ending)
+                      .order_by(PriceSheet.week_ending.desc())
+                      .first())
+    previous_prices = {item.canonical_cut_id: item.price for item in previous_sheet.line_items} if previous_sheet else {}
+
+    cuts = CanonicalCut.query.order_by(CanonicalCut.category, CanonicalCut.name).all()
+    grouped = {}
+    for cut in cuts:
+        grouped.setdefault(cut.category, []).append(cut)
+
+    return render_template('submit.html',
+                           vendor=vendor, grouped=grouped,
+                           current_prices=current_prices, previous_prices=previous_prices,
+                           week_ending=week_ending, current_sheet=current_sheet,
+                           is_late=_submission_is_late(current_sheet))
 
 
 # ── Vendors ──────────────────────────────────────────────────────────────────
 
 @app.route('/vendors')
-@login_required
+@admin_required
 def vendors():
     all_vendors = Vendor.query.order_by(Vendor.name).all()
     return render_template('vendors.html', vendors=all_vendors)
 
 
 @app.route('/vendors/add', methods=['POST'])
-@login_required
+@admin_required
 def add_vendor():
     name = request.form.get('name', '').strip()
-    if not name:
-        flash('Vendor name is required.', 'danger')
+    username = request.form.get('username', '').strip()
+    password = request.form.get('password', '')
+    if not name or not username or not password:
+        flash('Vendor name, username, and password are all required.', 'danger')
         return redirect(url_for('vendors'))
     if Vendor.query.filter_by(name=name).first():
         flash(f'Vendor "{name}" already exists.', 'warning')
         return redirect(url_for('vendors'))
-    db.session.add(Vendor(name=name))
+    if User.query.filter_by(username=username).first():
+        flash(f'Username "{username}" is already taken.', 'warning')
+        return redirect(url_for('vendors'))
+    vendor = Vendor(name=name)
+    db.session.add(vendor)
+    db.session.flush()
+    db.session.add(User(username=username, password_hash=generate_password_hash(password),
+                         role='vendor', vendor_id=vendor.id))
     db.session.commit()
     flash(f'Vendor "{name}" added.', 'success')
     return redirect(url_for('vendors'))
 
 
 @app.route('/vendors/<int:vendor_id>/delete', methods=['POST'])
-@login_required
+@admin_required
 def delete_vendor(vendor_id):
     vendor = db.get_or_404(Vendor, vendor_id)
+    if vendor.user:
+        db.session.delete(vendor.user)
     db.session.delete(vendor)
     db.session.commit()
     flash(f'Vendor "{vendor.name}" deleted.', 'success')
@@ -169,15 +341,32 @@ def delete_vendor(vendor_id):
 
 
 @app.route('/vendors/<int:vendor_id>')
-@login_required
+@admin_required
 def vendor_detail(vendor_id):
     vendor = db.get_or_404(Vendor, vendor_id)
     sheets = PriceSheet.query.filter_by(vendor_id=vendor_id).order_by(PriceSheet.uploaded_at.desc()).all()
-    return render_template('vendor_detail.html', vendor=vendor, sheets=sheets)
+    late_by_sheet = {s.id: _submission_is_late(s) for s in sheets}
+    return render_template('vendor_detail.html', vendor=vendor, sheets=sheets, late_by_sheet=late_by_sheet)
+
+
+@app.route('/vendors/<int:vendor_id>/reset-password', methods=['POST'])
+@admin_required
+def reset_vendor_password(vendor_id):
+    vendor = db.get_or_404(Vendor, vendor_id)
+    new_password = request.form.get('new_password', '')
+    if not vendor.user:
+        flash(f'"{vendor.name}" has no login account yet.', 'danger')
+    elif len(new_password) < 6:
+        flash('Password must be at least 6 characters.', 'danger')
+    else:
+        vendor.user.password_hash = generate_password_hash(new_password)
+        db.session.commit()
+        flash(f'Password reset for "{vendor.name}".', 'success')
+    return redirect(url_for('vendor_detail', vendor_id=vendor_id))
 
 
 @app.route('/vendors/<int:vendor_id>/toggle', methods=['POST'])
-@login_required
+@admin_required
 def toggle_vendor(vendor_id):
     vendor = db.get_or_404(Vendor, vendor_id)
     vendor.is_active = not vendor.is_active
@@ -188,7 +377,7 @@ def toggle_vendor(vendor_id):
 
 
 @app.route('/vendors/<int:vendor_id>/sheets/<int:sheet_id>/activate', methods=['POST'])
-@login_required
+@admin_required
 def activate_sheet(vendor_id, sheet_id):
     PriceSheet.query.filter_by(vendor_id=vendor_id, is_active=True).update({'is_active': False})
     sheet = db.get_or_404(PriceSheet, sheet_id)
@@ -199,7 +388,7 @@ def activate_sheet(vendor_id, sheet_id):
 
 
 @app.route('/vendors/<int:vendor_id>/sheets/<int:sheet_id>')
-@login_required
+@admin_required
 def sheet_detail(vendor_id, sheet_id):
     vendor = db.get_or_404(Vendor, vendor_id)
     sheet = db.get_or_404(PriceSheet, sheet_id)
@@ -211,7 +400,7 @@ def sheet_detail(vendor_id, sheet_id):
 
 
 @app.route('/vendors/<int:vendor_id>/mappings')
-@login_required
+@admin_required
 def vendor_mappings(vendor_id):
     vendor = db.get_or_404(Vendor, vendor_id)
     mappings = (CutMapping.query
@@ -224,7 +413,7 @@ def vendor_mappings(vendor_id):
 
 
 @app.route('/vendors/<int:vendor_id>/mappings/<int:mapping_id>/update', methods=['POST'])
-@login_required
+@admin_required
 def update_mapping(vendor_id, mapping_id):
     mapping = db.get_or_404(CutMapping, mapping_id)
     cut_id = request.form.get('canonical_cut_id', type=int)
@@ -243,7 +432,7 @@ def update_mapping(vendor_id, mapping_id):
 
 
 @app.route('/vendors/<int:vendor_id>/mappings/<int:mapping_id>/delete', methods=['POST'])
-@login_required
+@admin_required
 def delete_mapping(vendor_id, mapping_id):
     mapping = db.get_or_404(CutMapping, mapping_id)
     raw = mapping.raw_description
@@ -256,7 +445,7 @@ def delete_mapping(vendor_id, mapping_id):
 # ── Upload wizard: Step 1 — pick file ────────────────────────────────────────
 
 @app.route('/vendors/<int:vendor_id>/upload', methods=['GET', 'POST'])
-@login_required
+@admin_required
 def upload(vendor_id):
     vendor = db.get_or_404(Vendor, vendor_id)
 
@@ -331,7 +520,7 @@ def _col_letter(idx: int) -> str:
 # ── Upload wizard: Step 2 — pick columns ─────────────────────────────────────
 
 @app.route('/upload/<token>/columns', methods=['GET', 'POST'])
-@login_required
+@admin_required
 def column_picker(token):
     data = _load_tmp(token)
     if not data:
@@ -468,7 +657,7 @@ def column_picker(token):
 # ── Upload wizard: Step 2.5 — pick price per item ────────────────────────────
 
 @app.route('/upload/<token>/prices', methods=['GET', 'POST'])
-@login_required
+@admin_required
 def price_picker(token):
     data = _load_tmp(token)
     if not data:
@@ -512,7 +701,7 @@ def price_picker(token):
 # ── Upload wizard: Step 3 — map cut names ────────────────────────────────────
 
 @app.route('/upload/<token>/mapping', methods=['GET', 'POST'])
-@login_required
+@admin_required
 def cut_mapper(token):
     data = _load_tmp(token)
     if not data:
@@ -619,7 +808,7 @@ def cut_mapper(token):
 # ── Comparison ────────────────────────────────────────────────────────────────
 
 @app.route('/comparison')
-@login_required
+@admin_required
 def comparison():
     category_filter = request.args.get('category', 'all')
     vendors = Vendor.query.filter_by(is_active=True).order_by(Vendor.name).all()
@@ -700,7 +889,7 @@ def _build_report_data():
 
 
 @app.route('/reports')
-@login_required
+@admin_required
 def reports():
     by_vendor, sorted_vendors, vendor_map, active_sheets = _build_report_data()
     return render_template('reports.html',
@@ -712,7 +901,7 @@ def reports():
 
 
 @app.route('/reports/print')
-@login_required
+@admin_required
 def reports_print():
     by_vendor, sorted_vendors, vendor_map, active_sheets = _build_report_data()
     return render_template('reports_print.html',
@@ -727,7 +916,7 @@ def reports_print():
 # ── Price History ─────────────────────────────────────────────────────────────
 
 @app.route('/cuts/history')
-@login_required
+@admin_required
 def cut_history():
     cuts = CanonicalCut.query.order_by(CanonicalCut.category, CanonicalCut.name).all()
     cut_id = request.args.get('cut_id', type=int)
@@ -750,14 +939,14 @@ def cut_history():
 # ── Canonical cuts ────────────────────────────────────────────────────────────
 
 @app.route('/canonical-cuts')
-@login_required
+@admin_required
 def canonical_cuts():
     cuts = CanonicalCut.query.order_by(CanonicalCut.category, CanonicalCut.name).all()
     return render_template('canonical_cuts.html', cuts=cuts)
 
 
 @app.route('/canonical-cuts/add', methods=['POST'])
-@login_required
+@admin_required
 def add_canonical_cut():
     name = request.form.get('name', '').strip()
     category = request.form.get('category', 'beef')
@@ -774,7 +963,7 @@ def add_canonical_cut():
 
 
 @app.route('/canonical-cuts/<int:cut_id>/delete', methods=['POST'])
-@login_required
+@admin_required
 def delete_canonical_cut(cut_id):
     cut = db.get_or_404(CanonicalCut, cut_id)
     db.session.delete(cut)
@@ -784,7 +973,7 @@ def delete_canonical_cut(cut_id):
 
 
 @app.route('/canonical-cuts/<int:cut_id>/edit', methods=['POST'])
-@login_required
+@admin_required
 def edit_canonical_cut(cut_id):
     cut = db.get_or_404(CanonicalCut, cut_id)
     name = request.form.get('name', '').strip()

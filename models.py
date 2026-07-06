@@ -9,6 +9,18 @@ class Vendor(db.Model):
     is_active = db.Column(db.Boolean, default=True, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     price_sheets = db.relationship('PriceSheet', back_populates='vendor', lazy='dynamic')
+    user = db.relationship('User', back_populates='vendor', uselist=False)
+
+
+class User(db.Model):
+    __tablename__ = 'users'
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(100), nullable=False, unique=True)
+    password_hash = db.Column(db.String(255), nullable=False)
+    role = db.Column(db.String(20), nullable=False, default='vendor')  # 'admin' or 'vendor'
+    vendor_id = db.Column(db.Integer, db.ForeignKey('vendors.id'), nullable=True, unique=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    vendor = db.relationship('Vendor', back_populates='user')
 
 
 class PriceSheet(db.Model):
@@ -19,6 +31,8 @@ class PriceSheet(db.Model):
     uploaded_at = db.Column(db.DateTime, default=datetime.utcnow)
     is_active = db.Column(db.Boolean, default=True)
     item_count = db.Column(db.Integer, default=0)
+    week_ending = db.Column(db.Date, nullable=True)
+    source = db.Column(db.String(20), default='upload')  # 'upload' or 'form'
     vendor = db.relationship('Vendor', back_populates='price_sheets')
     line_items = db.relationship('LineItem', back_populates='price_sheet', lazy='dynamic')
 

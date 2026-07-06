@@ -27,12 +27,13 @@
     <span></span><span></span><span></span>
   </button>
   <nav>
+    {% if session.get('role') == 'admin' %}
     <a href="{{ url_for('comparison') }}"
        class="nav-btn {% if request.endpoint == 'comparison' %}active{% endif %}">
       Compare Prices
     </a>
     <a href="{{ url_for('vendors') }}"
-       class="nav-btn {% if request.endpoint in ('vendors','vendor_detail','upload','column_picker','price_picker','cut_mapper','toggle_vendor','activate_sheet','sheet_detail','vendor_mappings','update_mapping','delete_mapping') %}active{% endif %}">
+       class="nav-btn {% if request.endpoint in ('vendors','vendor_detail','upload','column_picker','price_picker','cut_mapper','toggle_vendor','activate_sheet','sheet_detail','vendor_mappings','update_mapping','delete_mapping','reset_vendor_password') %}active{% endif %}">
       Vendors
     </a>
     <a href="{{ url_for('canonical_cuts') }}"
@@ -46,6 +47,16 @@
     <a href="{{ url_for('reports') }}"
        class="nav-btn {% if request.endpoint == 'reports' %}active{% endif %}">
       Reports
+    </a>
+    {% else %}
+    <a href="{{ url_for('submit_prices') }}"
+       class="nav-btn {% if request.endpoint == 'submit_prices' %}active{% endif %}">
+      My Prices
+    </a>
+    {% endif %}
+    <a href="{{ url_for('change_password') }}"
+       class="nav-btn {% if request.endpoint == 'change_password' %}active{% endif %}">
+      Change Password
     </a>
     <a href="{{ url_for('logout') }}" class="nav-btn">Logout</a>
   </nav>

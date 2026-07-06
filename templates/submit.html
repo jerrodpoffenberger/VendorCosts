@@ -1,0 +1,64 @@
+{% extends 'base.html' %}
+{% block title %}My Prices — {{ vendor.name }}{% endblock %}
+
+{% block content %}
+<div class="section-header">
+  <h2>My Prices — {{ vendor.name }}</h2>
+</div>
+
+<div class="alert alert-info">
+  Due by <strong>5:00 PM Saturday, {{ week_ending.strftime('%m/%d/%Y') }}</strong>.
+  {% if current_sheet %}
+    Last saved {{ current_sheet.uploaded_at.strftime('%m/%d/%Y %I:%M %p') }}
+    {% if is_late %}
+      <span class="badge badge-warning" style="margin-left:6px;">Late</span>
+    {% else %}
+      <span class="badge badge-success" style="margin-left:6px;">On time</span>
+    {% endif %}
+  {% else %}
+    You haven't submitted prices for this week yet.
+  {% endif %}
+</div>
+
+<form method="post">
+  {% for category, cuts in grouped.items() %}
+  <div class="app-card" style="margin-bottom:20px;">
+    <div class="app-card-header">{{ category | upper }}</div>
+    <div class="app-card-body">
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Cut</th>
+              <th style="width:160px;">Last Week</th>
+              <th style="width:180px;">Your Price ($/lb)</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for cut in cuts %}
+            <tr>
+              <td class="fw-semibold">{{ cut.name }}</td>
+              <td class="text-muted">
+                {% if previous_prices.get(cut.id) is not none %}
+                  ${{ '%.2f'|format(previous_prices[cut.id]) }}
+                {% else %}
+                  —
+                {% endif %}
+              </td>
+              <td>
+                <input type="text" inputmode="decimal" name="price_{{ cut.id }}"
+                       class="form-control" placeholder="0.00"
+                       value="{{ '%.2f'|format(current_prices[cut.id]) if current_prices.get(cut.id) is not none else '' }}">
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+
+  <button type="submit" class="btn btn-primary btn-lg">Save Prices</button>
+</form>
+{% endblock %}
