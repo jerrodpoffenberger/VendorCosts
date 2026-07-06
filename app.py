@@ -334,6 +334,7 @@ def delete_vendor(vendor_id):
     vendor = db.get_or_404(Vendor, vendor_id)
     if vendor.user:
         db.session.delete(vendor.user)
+    CutMapping.query.filter_by(vendor_id=vendor_id).delete()
     db.session.delete(vendor)
     db.session.commit()
     flash(f'Vendor "{vendor.name}" deleted.', 'success')

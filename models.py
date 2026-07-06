@@ -8,7 +8,8 @@ class Vendor(db.Model):
     name = db.Column(db.String(100), nullable=False, unique=True)
     is_active = db.Column(db.Boolean, default=True, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    price_sheets = db.relationship('PriceSheet', back_populates='vendor', lazy='dynamic')
+    price_sheets = db.relationship('PriceSheet', back_populates='vendor', lazy='dynamic',
+                                    cascade='all, delete-orphan')
     user = db.relationship('User', back_populates='vendor', uselist=False)
 
 
@@ -34,7 +35,8 @@ class PriceSheet(db.Model):
     week_ending = db.Column(db.Date, nullable=True)
     source = db.Column(db.String(20), default='upload')  # 'upload' or 'form'
     vendor = db.relationship('Vendor', back_populates='price_sheets')
-    line_items = db.relationship('LineItem', back_populates='price_sheet', lazy='dynamic')
+    line_items = db.relationship('LineItem', back_populates='price_sheet', lazy='dynamic',
+                                  cascade='all, delete-orphan')
 
 
 class CanonicalCut(db.Model):
